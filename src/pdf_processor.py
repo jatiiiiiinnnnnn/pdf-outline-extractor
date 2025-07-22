@@ -1,40 +1,59 @@
 """
-PDF Processor - Main class for extracting document structure
+PDF Processor - Fixed for multi-page and optimized for speed
 """
 
 import fitz  # PyMuPDF
 import re
 import json
 from typing import List, Dict, Tuple, Optional
-from collections import defaultdict
-import numpy as np
-
-from text_analyzer import TextAnalyzer
-from font_analyzer import FontAnalyzer
-from structure_detector import StructureDetector
+from collections import Counter
+import time
 
 class PDFProcessor:
     def __init__(self):
-        self.text_analyzer = TextAnalyzer()
-        self.font_analyzer = FontAnalyzer()
-        self.structure_detector = StructureDetector()
+        # Pre-compile essential regex patterns only
+        self.heading_patterns = [
+            re.compile(r'^\d+\.?\s+[A-Z]'),
+            re.compile(r'^\d+(\.\d+)+\.?\s+'),
+            re.compile(r'^[A-Z][A-Z\s]{3,}$'),
+            re.compile(r'^(Chapter|Section|CHAPTER|SECTION)\s+\d+', re.IGNORECASE),
+        ]
+        
+        self.skip_patterns = [
+            re.compile(r'^(page|p\.)\s*\d+', re.IGNORECASE),
+            re.compile(r'^\d+\s*$'),
+            re.compile(r'@|\.com|\.org'),
+            re.compile(r'^(copyright|©)', re.IGNORECASE),
+        ]
     
     def extract_outline(self, pdf_path: str) -> Dict:
-        """Extract structured outline from PDF"""
+        """Extract outline from PDF - fixed for multi-page"""
         try:
+            start_time = time.time()
             doc = fitz.open(pdf_path)
             
-            # Extract text blocks with formatting info
-            text_blocks = self._extract_text_blocks(doc)
+            print(f"Processing {len(doc)} pages...")
             
-            # Analyze fonts and detect heading levels
-            font_info = self.font_analyzer.analyze_fonts(text_blocks)
+            # Extract all text blocks from ALL pages
+            all_blocks = []
+            for page_num in range(len(doc)):
+                page_blocks = self._extract_page_blocks(doc[page_num], page_num + 1)
+                all_blocks.extend(page_blocks)
+                
+                # Progress indicator for large docs
+                if page_num % 10 == 0 and page_num > 0:
+                    print(f"  Processed {page_num} pages...")
             
-            # Detect title and headings
-            title = self._extract_title(doc, text_blocks, font_info)
-            headings = self._extract_headings(text_blocks, font_info)
+            print(f"Extracted {len(all_blocks)} text blocks from {len(doc)} pages")
+            
+            # Extract title and headings
+            title = self._extract_title(doc, all_blocks)
+            headings = self._extract_headings(all_blocks)
             
             doc.close()
+            
+            elapsed = time.time() - start_time
+            print(f"Total processing time: {elapsed:.2f}s")
             
             return {
                 "title": title,
@@ -45,141 +64,197 @@ class PDFProcessor:
             print(f"Error processing PDF: {e}")
             return {"title": "", "outline": []}
     
-    def _extract_text_blocks(self, doc) -> List[Dict]:
-        """Extract text blocks with formatting information"""
+    def _extract_page_blocks(self, page, page_num: int) -> List[Dict]:
+        """Extract text blocks from a single page"""
         blocks = []
         
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            
-            # Get text blocks with formatting
+        try:
+            # Get text with basic formatting
             text_dict = page.get_text("dict")
             
-            for block in text_dict["blocks"]:
-                if "lines" not in block:  # Skip image blocks
+            for block in text_dict.get("blocks", []):
+                if "lines" not in block:
                     continue
                 
                 for line in block["lines"]:
                     line_text = ""
-                    spans_info = []
+                    total_size = 0
+                    bold_chars = 0
+                    total_chars = 0
                     
                     for span in line["spans"]:
-                        span_text = span["text"].strip()
-                        if span_text:
-                            line_text += span_text + " "
-                            spans_info.append({
-                                "text": span_text,
-                                "font": span["font"],
-                                "size": span["size"],
-                                "flags": span["flags"],
-                                "bbox": span["bbox"]
-                            })
+                        text = span["text"].strip()
+                        if text:
+                            line_text += text + " "
+                            char_count = len(text)
+                            total_size += span["size"] * char_count
+                            total_chars += char_count
+                            
+                            if span["flags"] & 16:  # Bold flag
+                                bold_chars += char_count
                     
                     line_text = line_text.strip()
-                    if line_text and spans_info:
+                    if line_text and total_chars > 0:
+                        avg_size = total_size / total_chars
+                        is_bold = bold_chars > (total_chars * 0.5)  # More than 50% bold
+                        
                         blocks.append({
                             "text": line_text,
-                            "page": page_num + 1,
-                            "bbox": line["bbox"],
-                            "spans": spans_info
+                            "page": page_num,
+                            "font_size": round(avg_size, 1),
+                            "is_bold": is_bold,
+                            "y_pos": line["bbox"][1]
                         })
+        
+        except Exception as e:
+            print(f"Error processing page {page_num}: {e}")
         
         return blocks
     
-    def _extract_title(self, doc, text_blocks: List[Dict], font_info: Dict) -> str:
+    def _extract_title(self, doc, blocks: List[Dict]) -> str:
         """Extract document title"""
-        if not text_blocks:
-            return ""
+        # Try metadata first
+        title = doc.metadata.get("title", "").strip()
+        if title and len(title) > 3 and len(title) < 150:
+            return title
         
-        # Try to get title from PDF metadata first
-        metadata_title = doc.metadata.get("title", "").strip()
-        if metadata_title and len(metadata_title) > 3:
-            return metadata_title
+        # Look in first page blocks
+        first_page_blocks = [b for b in blocks if b["page"] == 1][:10]
         
-        # Look for title in first few pages
-        first_page_blocks = [b for b in text_blocks if b["page"] <= 2]
+        best_candidate = ""
+        best_score = 0
         
-        if not first_page_blocks:
-            return ""
-        
-        # Find the largest font or most prominent text
-        title_candidates = []
-        
-        for block in first_page_blocks[:10]:  # Check first 10 blocks
+        for block in first_page_blocks:
             text = block["text"]
             
-            # Skip very short or very long texts
-            if len(text) < 5 or len(text) > 150:
+            # Basic filters
+            if len(text) < 5 or len(text) > 200:
+                continue
+                
+            # Skip common non-titles
+            if any(pattern.search(text) for pattern in self.skip_patterns):
                 continue
             
-            # Skip common non-title patterns
-            if self.text_analyzer.is_likely_non_title(text):
+            # Score based on size and position
+            score = block["font_size"]
+            if block["is_bold"]:
+                score *= 1.3
+            if block["page"] == 1:
+                score *= 1.2
+            
+            if score > best_score:
+                best_score = score
+                best_candidate = text
+        
+        return best_candidate
+    
+    def _extract_headings(self, blocks: List[Dict]) -> List[Dict]:
+        """Extract headings from all pages"""
+        if not blocks:
+            return []
+        
+        # Calculate typical body font size
+        font_sizes = [b["font_size"] for b in blocks]
+        font_counter = Counter(font_sizes)
+        body_size = font_counter.most_common(1)[0][0]
+        
+        print(f"Detected body font size: {body_size}")
+        
+        candidates = []
+        
+        for block in blocks:
+            text = block["text"]
+            
+            # Length filter
+            if len(text) < 3 or len(text) > 150:
                 continue
             
-            # Get dominant font size for this block
-            font_sizes = [span["size"] for span in block["spans"]]
-            avg_font_size = np.mean(font_sizes) if font_sizes else 12
+            # Skip obvious non-headings
+            if any(pattern.search(text) for pattern in self.skip_patterns):
+                continue
             
-            title_candidates.append({
-                "text": text,
-                "font_size": avg_font_size,
-                "page": block["page"],
-                "position": block["bbox"][1]  # Y position
-            })
-        
-        if not title_candidates:
-            return ""
-        
-        # Sort by font size (descending) and position (ascending)
-        title_candidates.sort(key=lambda x: (-x["font_size"], x["position"]))
-        
-        # Return the best candidate
-        return title_candidates[0]["text"]
-    
-    def _extract_headings(self, text_blocks: List[Dict], font_info: Dict) -> List[Dict]:
-        """Extract headings with hierarchical levels"""
-        headings = []
-        
-        # Analyze text patterns and structure
-        heading_candidates = self.structure_detector.detect_headings(text_blocks, font_info)
-        
-        # Assign hierarchical levels
-        level_assignments = self._assign_heading_levels(heading_candidates)
-        
-        for candidate in heading_candidates:
-            level = level_assignments.get(candidate["id"], "H1")
+            score = 0
             
-            headings.append({
-                "level": level,
-                "text": candidate["text"],
-                "page": candidate["page"]
-            })
+            # Font size scoring (most important factor)
+            if block["font_size"] > body_size + 1:
+                score += (block["font_size"] - body_size) * 0.1
+            
+            # Bold text bonus
+            if block["is_bold"]:
+                score += 0.3
+            
+            # Pattern matching
+            if any(pattern.match(text) for pattern in self.heading_patterns):
+                score += 0.4
+            
+            # Length bonus for reasonable heading length
+            if 5 <= len(text) <= 80:
+                score += 0.2
+            
+            # Capitalization patterns
+            if text[0].isupper() and not text.endswith('.'):
+                score += 0.1
+            
+            if score >= 0.4:  # Lowered threshold
+                candidates.append({
+                    "text": text,
+                    "page": block["page"],
+                    "score": score,
+                    "font_size": block["font_size"]
+                })
         
-        return headings
-    
-    def _assign_heading_levels(self, candidates: List[Dict]) -> Dict[str, str]:
-        """Assign H1, H2, H3 levels to heading candidates"""
-        if not candidates:
-            return {}
+        print(f"Found {len(candidates)} heading candidates")
         
-        # Group by font size and style
-        font_groups = defaultdict(list)
+        # Remove duplicates and sort
+        seen_texts = set()
+        unique_candidates = []
         
         for candidate in candidates:
-            # Create a key based on font size and style
-            key = (candidate["font_size"], candidate["font_weight"])
-            font_groups[key].append(candidate)
+            text_lower = candidate["text"].lower().strip()
+            if text_lower not in seen_texts:
+                seen_texts.add(text_lower)
+                unique_candidates.append(candidate)
         
-        # Sort font groups by size (largest first)
-        sorted_groups = sorted(font_groups.keys(), key=lambda x: -x[0])
+        # Sort by score, then by page
+        unique_candidates.sort(key=lambda x: (-x["score"], x["page"]))
         
-        # Assign levels based on font hierarchy
-        level_map = {}
+        # Assign levels based on font size groups
+        return self._assign_levels(unique_candidates)
+    
+    def _assign_levels(self, candidates: List[Dict]) -> List[Dict]:
+        """Assign H1, H2, H3 levels based on font sizes"""
+        if not candidates:
+            return []
+        
+        # Group by font size
+        size_groups = {}
+        for candidate in candidates:
+            size = candidate["font_size"]
+            if size not in size_groups:
+                size_groups[size] = []
+            size_groups[size].append(candidate)
+        
+        # Sort sizes in descending order
+        sorted_sizes = sorted(size_groups.keys(), reverse=True)
+        
+        # Assign levels
+        result = []
         level_names = ["H1", "H2", "H3"]
         
-        for i, group_key in enumerate(sorted_groups[:3]):  # Only H1-H3
+        for i, size in enumerate(sorted_sizes[:3]):  # Only top 3 sizes
             level = level_names[i]
-            for candidate in font_groups[group_key]:
-                level_map[candidate["id"]] = level
+            for candidate in size_groups[size]:
+                result.append({
+                    "level": level,
+                    "text": candidate["text"],
+                    "page": candidate["page"]
+                })
         
-        return level_map
+        # Sort final result by page number
+        result.sort(key=lambda x: x["page"])
+        
+        print(f"Final headings: {len(result)}")
+        for h in result:
+            print(f"  {h['level']}: {h['text'][:50]} (page {h['page']})")
+        
+        return result

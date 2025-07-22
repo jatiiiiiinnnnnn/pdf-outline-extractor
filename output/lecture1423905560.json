@@ -1,0 +1,90 @@
+{
+  "title": "IWT-I (BCS-308)",
+  "outline": [
+    {
+      "level": "H1",
+      "text": "COMPUTER NETWORKS",
+      "page": 1
+    },
+    {
+      "level": "H1",
+      "text": "Lecture Notes",
+      "page": 1
+    },
+    {
+      "level": "H3",
+      "text": "DEPARTMENT OF COMPUTER SCIENCE & ENGINEERING, IT",
+      "page": 1
+    },
+    {
+      "level": "H3",
+      "text": "Veer Surendra Sai University of Technology",
+      "page": 1
+    },
+    {
+      "level": "H3",
+      "text": "Burla-768018",
+      "page": 1
+    },
+    {
+      "level": "H2",
+      "text": "FIREWALL",
+      "page": 39
+    },
+    {
+      "level": "H2",
+      "text": "Introduction",
+      "page": 39
+    },
+    {
+      "level": "H2",
+      "text": "Why a Firewall is needed?",
+      "page": 39
+    },
+    {
+      "level": "H2",
+      "text": "Access Control Policies",
+      "page": 40
+    },
+    {
+      "level": "H2",
+      "text": "Firewall Capabilities",
+      "page": 40
+    },
+    {
+      "level": "H2",
+      "text": "Limitations of a Firewall",
+      "page": 40
+    },
+    {
+      "level": "H2",
+      "text": "Types of Firewalls",
+      "page": 40
+    },
+    {
+      "level": "H2",
+      "text": "Bastion Host",
+      "page": 41
+    },
+    {
+      "level": "H2",
+      "text": "Network Address Translation",
+      "page": 41
+    },
+    {
+      "level": "H2",
+      "text": "Firewall Configurations",
+      "page": 42
+    },
+    {
+      "level": "H2",
+      "text": "Active Firewall Elements",
+      "page": 43
+    },
+    {
+      "level": "H2",
+      "text": "References",
+      "page": 44
+    }
+  ]
+}

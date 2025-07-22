@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-PDF Outline Extractor - Main Entry Point
-Processes all PDFs in /app/input and generates JSON outlines in /app/output
+PDF Outline Extractor - Optimized for Speed
 """
 
 import os
@@ -52,6 +51,8 @@ def process_all_pdfs():
             
             elapsed = time.time() - start_time
             print(f"✓ Completed {pdf_path.name} in {elapsed:.2f}s -> {output_filename}")
+            print(f"  Title: {result['title'][:50]}{'...' if len(result['title']) > 50 else ''}")
+            print(f"  Headings: {len(result['outline'])}")
             
         except Exception as e:
             print(f"✗ Error processing {pdf_path.name}: {e}")
